@@ -173,156 +173,177 @@ const proxyOptions = {
       
       // Перехватываем HTML-ответы и внедряем JavaScript для перехвата кликов
       if (contentType.includes('text/html')) {
-        console.log(`[PAYMENT INTERCEPT] Injecting JavaScript into HTML page: ${req.method} ${req.path}`);
-        
-        // JavaScript код для перехвата кликов на кнопки оплаты и AJAX запросов
-        const injectionScript = `
+        try {
+          console.log(`[PAYMENT INTERCEPT] Injecting JavaScript into HTML page: ${req.method} ${req.path}`);
+          
+          // Упрощенный JavaScript код - используем редирект вместо встраивания HTML
+          const injectionScript = `
 <script>
 (function() {
-  console.log('[PAYMENT INTERCEPT] JavaScript injection loaded');
-  
-  // Перехватываем все клики на кнопки оплаты
-  document.addEventListener('click', function(e) {
-    const target = e.target;
-    const text = (target.textContent || target.innerText || '').toLowerCase();
-    const href = target.href || '';
-    const className = target.className || '';
-    const id = target.id || '';
+  try {
+    console.log('[PAYMENT INTERCEPT] JavaScript injection loaded');
     
-    // Проверяем, является ли это кнопкой оплаты
-    const isPaymentButton = text.includes('paiement') ||
-                           text.includes('payment') ||
-                           text.includes('checkout') ||
-                           text.includes('pay') ||
-                           text.includes('payer') ||
-                           className.toLowerCase().includes('checkout') ||
-                           className.toLowerCase().includes('payment') ||
-                           className.toLowerCase().includes('paiement') ||
-                           id.toLowerCase().includes('checkout') ||
-                           id.toLowerCase().includes('payment') ||
-                           href.toLowerCase().includes('checkout') ||
-                           href.toLowerCase().includes('payment');
-    
-    if (isPaymentButton) {
-      console.log('[PAYMENT INTERCEPT] Payment button clicked, intercepting...');
-      e.preventDefault();
-      e.stopPropagation();
-      e.stopImmediatePropagation();
-      
-      // Заменяем содержимое страницы на страницу благодарности
-      document.documentElement.innerHTML = \`${thankYouPage.replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`;
-      return false;
-    }
-  }, true); // Используем capture phase для перехвата до других обработчиков
-  
-  // Перехватываем XMLHttpRequest
-  const originalXHROpen = XMLHttpRequest.prototype.open;
-  const originalXHRSend = XMLHttpRequest.prototype.send;
-  
-  XMLHttpRequest.prototype.open = function(method, url, ...args) {
-    this._url = url;
-    this._method = method;
-    return originalXHROpen.apply(this, [method, url, ...args]);
-  };
-  
-  XMLHttpRequest.prototype.send = function(...args) {
-    const url = (this._url || '').toLowerCase();
-    const method = (this._method || '').toUpperCase();
-    
-    if (url.includes('checkout') || url.includes('payment') || url.includes('paiement') || url.includes('cart')) {
-      console.log('[PAYMENT INTERCEPT] Intercepting XHR request:', method, url);
-      
-      // Перехватываем ответ
-      this.addEventListener('load', function() {
-        console.log('[PAYMENT INTERCEPT] XHR response intercepted, showing thank you page');
-        document.documentElement.innerHTML = \`${thankYouPage.replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`;
-      }, { once: true });
+    // Функция для показа страницы благодарности
+    function showThankYouPage() {
+      window.location.href = '/thank-you-payment';
     }
     
-    return originalXHRSend.apply(this, args);
-  };
-  
-  // Перехватываем Fetch API
-  const originalFetch = window.fetch;
-  window.fetch = function(url, options = {}) {
-    const urlStr = (typeof url === 'string' ? url : url.url || '').toLowerCase();
-    
-    if (urlStr.includes('checkout') || urlStr.includes('payment') || urlStr.includes('paiement') || urlStr.includes('cart')) {
-      console.log('[PAYMENT INTERCEPT] Intercepting Fetch request:', urlStr);
-      
-      // Возвращаем промис, который заменяет страницу
-      return Promise.resolve().then(() => {
-        console.log('[PAYMENT INTERCEPT] Fetch response intercepted, showing thank you page');
-        document.documentElement.innerHTML = \`${thankYouPage.replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`;
-        return new Response(JSON.stringify({ success: true, redirect: '/thank-you-payment' }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      });
-    }
-    
-    return originalFetch.apply(this, arguments);
-  };
-  
-  // Перехватываем jQuery AJAX (если используется)
-  if (window.jQuery) {
-    const originalAjax = window.jQuery.ajax;
-    window.jQuery.ajax = function(options) {
-      const url = (options.url || '').toLowerCase();
-      
-      if (url.includes('checkout') || url.includes('payment') || url.includes('paiement') || url.includes('cart')) {
-        console.log('[PAYMENT INTERCEPT] Intercepting jQuery AJAX request:', url);
+    // Перехватываем все клики на кнопки оплаты
+    document.addEventListener('click', function(e) {
+      try {
+        const target = e.target;
+        const text = (target.textContent || target.innerText || '').toLowerCase();
+        const href = target.href || '';
+        const className = String(target.className || '').toLowerCase();
+        const id = String(target.id || '').toLowerCase();
         
-        // Перехватываем success callback
-        const originalSuccess = options.success;
-        options.success = function(data, textStatus, jqXHR) {
-          console.log('[PAYMENT INTERCEPT] jQuery AJAX success intercepted, showing thank you page');
-          document.documentElement.innerHTML = \`${thankYouPage.replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`;
-          if (originalSuccess) originalSuccess.apply(this, arguments);
-        };
+        // Проверяем, является ли это кнопкой оплаты
+        const isPaymentButton = text.includes('paiement') ||
+                               text.includes('payment') ||
+                               text.includes('checkout') ||
+                               text.includes('pay') ||
+                               text.includes('payer') ||
+                               className.includes('checkout') ||
+                               className.includes('payment') ||
+                               className.includes('paiement') ||
+                               id.includes('checkout') ||
+                               id.includes('payment') ||
+                               href.toLowerCase().includes('checkout') ||
+                               href.toLowerCase().includes('payment');
+        
+        if (isPaymentButton) {
+          console.log('[PAYMENT INTERCEPT] Payment button clicked, intercepting...');
+          e.preventDefault();
+          e.stopPropagation();
+          e.stopImmediatePropagation();
+          showThankYouPage();
+          return false;
+        }
+      } catch(err) {
+        console.error('[PAYMENT INTERCEPT] Error in click handler:', err);
       }
-      
-      return originalAjax.apply(this, arguments);
-    };
-  }
-  
-  // Перехватываем формы
-  document.addEventListener('submit', function(e) {
-    const form = e.target;
-    const action = (form.action || '').toLowerCase();
-    const formData = new FormData(form);
-    const formText = form.textContent || form.innerText || '';
+    }, true);
     
-    if (action.includes('checkout') || action.includes('payment') || action.includes('paiement') ||
-        formText.toLowerCase().includes('paiement') || formText.toLowerCase().includes('payment')) {
-      console.log('[PAYMENT INTERCEPT] Form submission intercepted');
-      e.preventDefault();
-      e.stopPropagation();
-      document.documentElement.innerHTML = \`${thankYouPage.replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`;
-      return false;
+    // Перехватываем XMLHttpRequest
+    try {
+      const originalXHROpen = XMLHttpRequest.prototype.open;
+      const originalXHRSend = XMLHttpRequest.prototype.send;
+      
+      XMLHttpRequest.prototype.open = function(method, url) {
+        this._url = url;
+        this._method = method;
+        return originalXHROpen.apply(this, arguments);
+      };
+      
+      XMLHttpRequest.prototype.send = function() {
+        const url = String(this._url || '').toLowerCase();
+        
+        if (url.includes('checkout') || url.includes('payment') || url.includes('paiement') || url.includes('cart')) {
+          console.log('[PAYMENT INTERCEPT] Intercepting XHR request:', url);
+          this.addEventListener('load', function() {
+            console.log('[PAYMENT INTERCEPT] XHR response intercepted');
+            showThankYouPage();
+          }, { once: true });
+        }
+        
+        return originalXHRSend.apply(this, arguments);
+      };
+    } catch(err) {
+      console.error('[PAYMENT INTERCEPT] Error intercepting XHR:', err);
     }
-  }, true);
+    
+    // Перехватываем Fetch API
+    try {
+      const originalFetch = window.fetch;
+      window.fetch = function(url, options) {
+        const urlStr = String(typeof url === 'string' ? url : (url && url.url) || '').toLowerCase();
+        
+        if (urlStr.includes('checkout') || urlStr.includes('payment') || urlStr.includes('paiement') || urlStr.includes('cart')) {
+          console.log('[PAYMENT INTERCEPT] Intercepting Fetch request:', urlStr);
+          showThankYouPage();
+          return Promise.resolve(new Response(JSON.stringify({ success: true, redirect: '/thank-you-payment' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+          }));
+        }
+        
+        return originalFetch.apply(this, arguments);
+      };
+    } catch(err) {
+      console.error('[PAYMENT INTERCEPT] Error intercepting Fetch:', err);
+    }
+    
+    // Перехватываем формы
+    document.addEventListener('submit', function(e) {
+      try {
+        const form = e.target;
+        const action = String(form.action || '').toLowerCase();
+        const formText = (form.textContent || form.innerText || '').toLowerCase();
+        
+        if (action.includes('checkout') || action.includes('payment') || action.includes('paiement') ||
+            formText.includes('paiement') || formText.includes('payment')) {
+          console.log('[PAYMENT INTERCEPT] Form submission intercepted');
+          e.preventDefault();
+          e.stopPropagation();
+          showThankYouPage();
+          return false;
+        }
+      } catch(err) {
+        console.error('[PAYMENT INTERCEPT] Error in form handler:', err);
+      }
+    }, true);
+  } catch(err) {
+    console.error('[PAYMENT INTERCEPT] Critical error:', err);
+  }
 })();
 </script>
 `;
-        
-        // Внедряем скрипт перед закрывающим тегом </body> или перед </html>
-        let modifiedBody = bodyString;
-        if (modifiedBody.includes('</body>')) {
-          modifiedBody = modifiedBody.replace('</body>', injectionScript + '</body>');
-        } else if (modifiedBody.includes('</html>')) {
-          modifiedBody = modifiedBody.replace('</html>', injectionScript + '</html>');
-        } else {
-          // Если нет закрывающих тегов, добавляем в конец
-          modifiedBody = modifiedBody + injectionScript;
+          
+          // Внедряем скрипт перед закрывающим тегом </body> или перед </html>
+          let modifiedBody = bodyString;
+          const bodyLength = modifiedBody.length;
+          
+          // Ищем место для вставки
+          const bodyEndIndex = modifiedBody.lastIndexOf('</body>');
+          const htmlEndIndex = modifiedBody.lastIndexOf('</html>');
+          
+          if (bodyEndIndex > -1) {
+            // Вставляем перед </body>
+            modifiedBody = modifiedBody.substring(0, bodyEndIndex) + injectionScript + modifiedBody.substring(bodyEndIndex);
+          } else if (htmlEndIndex > -1) {
+            // Вставляем перед </html>
+            modifiedBody = modifiedBody.substring(0, htmlEndIndex) + injectionScript + modifiedBody.substring(htmlEndIndex);
+          } else {
+            // Если нет закрывающих тегов, добавляем в конец
+            modifiedBody = modifiedBody + injectionScript;
+          }
+          
+          // Проверяем, что модификация не сломала структуру
+          if (modifiedBody.length > bodyLength && modifiedBody.includes('</html>')) {
+            // Для всех остальных HTML ответов отправляем модифицированный контент
+            if (!res.headersSent) {
+              res.writeHead(proxyRes.statusCode, modifiedHeaders);
+            }
+            res.end(modifiedBody);
+            return;
+          } else {
+            // Если что-то пошло не так, отправляем оригинальный контент
+            console.error('[PAYMENT INTERCEPT] Failed to inject script, sending original content');
+            if (!res.headersSent) {
+              res.writeHead(proxyRes.statusCode, modifiedHeaders);
+            }
+            res.end(body);
+            return;
+          }
+        } catch (injectionError) {
+          console.error('[PAYMENT INTERCEPT] Error during injection:', injectionError);
+          // В случае ошибки отправляем оригинальный контент
+          if (!res.headersSent) {
+            res.writeHead(proxyRes.statusCode, modifiedHeaders);
+          }
+          res.end(body);
+          return;
         }
-        
-        // Для всех остальных HTML ответов отправляем модифицированный контент
-        if (!res.headersSent) {
-          res.writeHead(proxyRes.statusCode, modifiedHeaders);
-        }
-        res.end(modifiedBody);
-        return;
       }
       
       // Для всех остальных ответов отправляем оригинальный контент с модифицированными заголовками
