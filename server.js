@@ -151,7 +151,8 @@ const proxyOptions = {
     });
     
     proxyRes.on('end', () => {
-      let bodyString = body.toString();
+      // Всегда конвертируем body в строку для работы с текстовыми ответами
+      let bodyString = body.length > 0 ? body.toString() : '';
       const contentType = (modifiedHeaders['content-type'] || '').toLowerCase();
       
       // Перехватываем JSON ответы от API (AJAX запросы)
