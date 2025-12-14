@@ -194,7 +194,7 @@ const proxyOptions = {
       }
       
       // Перехватываем HTML-ответы и внедряем JavaScript для перехвата кликов
-      if (contentType.includes('text/html')) {
+      if (contentType.includes('text/html') && bodyString && bodyString.length > 0) {
         try {
           console.log(`[PAYMENT INTERCEPT] Injecting JavaScript into HTML page: ${req.method} ${req.path}`);
           
