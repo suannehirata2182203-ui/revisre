@@ -1,6 +1,8 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const { HttpsProxyAgent } = require('https-proxy-agent');
+const http = require('http');
+const https = require('https');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -10,14 +12,29 @@ const TARGET_URL = process.env.TARGET_URL || 'https://beyondchargers.com';
 
 // Настройки прокси (если требуется)
 const USE_PROXY = process.env.USE_PROXY === 'true' || process.env.PROXY_USER;
-const PROXY_CONFIG = USE_PROXY ? {
-  host: process.env.PROXY_HOST || '185.162.130.86',
-  port: parseInt(process.env.PROXY_PORT || '10000'),
-  auth: {
-    username: process.env.PROXY_USER || 'UInVgOaurISMxHUOMkfD',
-    password: process.env.PROXY_PASS || 'xnElmQSosaC9sekBD1SRzgqgBWcj2HsZ'
+let PROXY_CONFIG = null;
+let proxyAgent = undefined;
+
+if (USE_PROXY) {
+  try {
+    PROXY_CONFIG = {
+      host: process.env.PROXY_HOST || '185.162.130.86',
+      port: parseInt(process.env.PROXY_PORT || '10000'),
+      auth: {
+        username: process.env.PROXY_USER || 'UInVgOaurISMxHUOMkfD',
+        password: process.env.PROXY_PASS || 'xnElmQSosaC9sekBD1SRzgqgBWcj2HsZ'
+      }
+    };
+    const proxyUrl = `http://${PROXY_CONFIG.auth.username}:${PROXY_CONFIG.auth.password}@${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`;
+    proxyAgent = new HttpsProxyAgent(proxyUrl);
+    console.log(`✅ Proxy agent configured: ${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`);
+  } catch (error) {
+    console.error(`❌ Error configuring proxy: ${error.message}`);
+    console.log('⚠️  Continuing without proxy...');
+    PROXY_CONFIG = null;
+    proxyAgent = undefined;
   }
-} : null;
+}
 
 // Функция для создания прокси-конфигурации
 const proxyOptions = {
@@ -25,7 +42,14 @@ const proxyOptions = {
   changeOrigin: true,
   secure: true,
   followRedirects: true,
-  logLevel: 'debug',
+  logLevel: process.env.NODE_ENV === 'production' ? 'warn' : 'debug',
+  timeout: 30000, // 30 секунд таймаут
+  proxyTimeout: 30000,
+  // Если используется внешний прокси
+  agent: proxyAgent,
+  // Настройки для HTTP/HTTPS агентов
+  httpAgent: proxyAgent || new http.Agent({ keepAlive: true }),
+  httpsAgent: proxyAgent || new https.Agent({ keepAlive: true }),
   onProxyReq: (proxyReq, req, res) => {
     // Логирование запросов для образовательных целей
     console.log(`[PROXY] ${req.method} ${req.url} -> ${TARGET_URL}${req.url}`);
@@ -33,6 +57,9 @@ const proxyOptions = {
     // Удаляем заголовки, которые могут вызвать проблемы
     proxyReq.removeHeader('x-forwarded-host');
     proxyReq.removeHeader('x-forwarded-proto');
+    
+    // Устанавливаем правильные заголовки
+    proxyReq.setHeader('Host', new URL(TARGET_URL).hostname);
   },
   onProxyRes: (proxyRes, req, res) => {
     // Модификация ответов для корректной работы прокси
@@ -48,20 +75,38 @@ const proxyOptions = {
     delete proxyRes.headers['x-frame-options'];
     delete proxyRes.headers['content-security-policy'];
     delete proxyRes.headers['strict-transport-security'];
+    delete proxyRes.headers['x-content-type-options'];
     
     // Добавляем заголовок для образовательных целей
     proxyRes.headers['x-proxy-demo'] = 'Educational Purpose Only';
   },
   onError: (err, req, res) => {
-    console.error('[PROXY ERROR]', err);
-    res.status(500).send('Proxy Error: ' + err.message);
-  },
-  // Если используется внешний прокси
-  agent: PROXY_CONFIG ? new HttpsProxyAgent(
-    `http://${PROXY_CONFIG.auth.username}:${PROXY_CONFIG.auth.password}@${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`
-  ) : undefined,
-  // Дополнительные опции для прокси
-  router: PROXY_CONFIG ? undefined : undefined
+    console.error('[PROXY ERROR]', err.message);
+    console.error('[PROXY ERROR] Stack:', err.stack);
+    
+    if (!res.headersSent) {
+      res.status(502).send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>Proxy Error</title>
+          <style>
+            body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+            .error { background: #f8d7da; border: 2px solid #dc3545; padding: 20px; border-radius: 5px; }
+          </style>
+        </head>
+        <body>
+          <div class="error">
+            <h2>⚠️ Proxy Error</h2>
+            <p><strong>Error:</strong> ${err.message}</p>
+            <p>The proxy server encountered an error while trying to connect to the target site.</p>
+            <p><a href="/">← Back to home</a></p>
+          </div>
+        </body>
+        </html>
+      `);
+    }
+  }
 };
 
 // Создаем прокси-мидлвар
@@ -119,26 +164,53 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Применяем прокси ко всем остальным маршрутам (кроме корня, где показываем предупреждение)
+// Middleware для обработки всех запросов
 app.use((req, res, next) => {
+  // Если это корневой путь без параметра proxy, показываем предупреждение
   if (req.path === '/' && req.method === 'GET' && !req.query.proxy) {
     return next();
   }
-  proxy(req, res, next);
+  
+  // Для всех остальных запросов применяем прокси
+  try {
+    proxy(req, res, next);
+  } catch (error) {
+    console.error('[MIDDLEWARE ERROR]', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal server error', message: error.message });
+    }
+  }
 });
 
-// Обработка ошибок
+// Обработка ошибок Express
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
-  res.status(500).json({ error: 'Internal Server Error', message: err.message });
+  console.error('[EXPRESS ERROR]', err);
+  if (!res.headersSent) {
+    res.status(500).json({ 
+      error: 'Internal Server Error', 
+      message: process.env.NODE_ENV === 'production' ? 'An error occurred' : err.message 
+    });
+  }
 });
 
-app.listen(PORT, () => {
+// Обработка необработанных ошибок
+process.on('uncaughtException', (error) => {
+  console.error('[UNCAUGHT EXCEPTION]', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[UNHANDLED REJECTION]', reason);
+});
+
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Educational Reverse Proxy Server running on port ${PORT}`);
   console.log(`📡 Proxying to: ${TARGET_URL}`);
   if (PROXY_CONFIG) {
     console.log(`🔐 Using proxy: ${PROXY_CONFIG.host}:${PROXY_CONFIG.port}`);
+  } else {
+    console.log(`ℹ️  Direct connection (no proxy)`);
   }
   console.log(`⚠️  WARNING: This is for educational purposes only!`);
+  console.log(`✅ Server is ready to accept connections`);
 });
 
