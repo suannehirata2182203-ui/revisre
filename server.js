@@ -54,12 +54,43 @@ const proxyOptions = {
     // Логирование запросов для образовательных целей
     console.log(`[PROXY] ${req.method} ${req.url} -> ${TARGET_URL}${req.url}`);
     
-    // Удаляем заголовки, которые могут вызвать проблемы
-    proxyReq.removeHeader('x-forwarded-host');
-    proxyReq.removeHeader('x-forwarded-proto');
-    
-    // Устанавливаем правильные заголовки
-    proxyReq.setHeader('Host', new URL(TARGET_URL).hostname);
+    try {
+      // Безопасное удаление заголовков (только если запрос еще не отправлен)
+      // Проверяем, можно ли модифицировать заголовки
+      if (proxyReq && !proxyReq.headersSent) {
+        // Удаляем заголовки только если они существуют
+        const headersToRemove = ['x-forwarded-host', 'x-forwarded-proto'];
+        headersToRemove.forEach(headerName => {
+          try {
+            if (proxyReq.getHeader && proxyReq.getHeader(headerName)) {
+              proxyReq.removeHeader(headerName);
+            }
+          } catch (e) {
+            // Игнорируем ошибки при удалении заголовков
+          }
+        });
+      }
+      
+      // Устанавливаем правильные заголовки
+      const targetHost = new URL(TARGET_URL).hostname;
+      try {
+        proxyReq.setHeader('Host', targetHost);
+      } catch (e) {
+        // Если не удалось установить Host, продолжаем
+      }
+      
+      // Устанавливаем User-Agent, если его нет
+      try {
+        if (!proxyReq.getHeader || !proxyReq.getHeader('user-agent')) {
+          proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+        }
+      } catch (e) {
+        // Игнорируем ошибки
+      }
+    } catch (error) {
+      // Логируем ошибку, но не прерываем выполнение
+      console.error('[PROXY REQ ERROR]', error.message);
+    }
   },
   onProxyRes: (proxyRes, req, res) => {
     // Модификация ответов для корректной работы прокси
@@ -82,29 +113,40 @@ const proxyOptions = {
   },
   onError: (err, req, res) => {
     console.error('[PROXY ERROR]', err.message);
-    console.error('[PROXY ERROR] Stack:', err.stack);
+    if (err.stack) {
+      console.error('[PROXY ERROR] Stack:', err.stack);
+    }
     
-    if (!res.headersSent) {
-      res.status(502).send(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>Proxy Error</title>
-          <style>
-            body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
-            .error { background: #f8d7da; border: 2px solid #dc3545; padding: 20px; border-radius: 5px; }
-          </style>
-        </head>
-        <body>
-          <div class="error">
-            <h2>⚠️ Proxy Error</h2>
-            <p><strong>Error:</strong> ${err.message}</p>
-            <p>The proxy server encountered an error while trying to connect to the target site.</p>
-            <p><a href="/">← Back to home</a></p>
-          </div>
-        </body>
-        </html>
-      `);
+    // Проверяем, не отправлены ли уже заголовки
+    if (!res.headersSent && !res.writableEnded) {
+      try {
+        res.status(502).send(`
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>Proxy Error</title>
+            <style>
+              body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+              .error { background: #f8d7da; border: 2px solid #dc3545; padding: 20px; border-radius: 5px; }
+              a { color: #007bff; text-decoration: none; }
+            </style>
+          </head>
+          <body>
+            <div class="error">
+              <h2>⚠️ Proxy Error</h2>
+              <p><strong>Error:</strong> ${err.message || 'Unknown error'}</p>
+              <p>The proxy server encountered an error while trying to connect to the target site.</p>
+              <p><a href="/">← Back to home</a></p>
+            </div>
+          </body>
+          </html>
+        `);
+      } catch (sendError) {
+        console.error('[ERROR SENDING RESPONSE]', sendError.message);
+        // Если не удалось отправить ответ, просто логируем ошибку
+      }
+    } else {
+      console.error('[PROXY ERROR] Response already sent, cannot send error page');
     }
   }
 };
@@ -173,11 +215,37 @@ app.use((req, res, next) => {
   
   // Для всех остальных запросов применяем прокси
   try {
+    // Добавляем обработчик ошибок для этого запроса
+    const errorHandler = (err) => {
+      console.error('[PROXY MIDDLEWARE ERROR]', err.message);
+      if (!res.headersSent && !res.writableEnded) {
+        try {
+          res.status(502).json({ 
+            error: 'Proxy error', 
+            message: process.env.NODE_ENV === 'production' ? 'Service temporarily unavailable' : err.message 
+          });
+        } catch (sendError) {
+          console.error('[ERROR SENDING ERROR RESPONSE]', sendError.message);
+        }
+      }
+    };
+    
+    // Применяем прокси
     proxy(req, res, next);
+    
+    // Обрабатываем ошибки на объекте ответа
+    res.on('error', errorHandler);
   } catch (error) {
-    console.error('[MIDDLEWARE ERROR]', error);
-    if (!res.headersSent) {
-      res.status(500).json({ error: 'Internal server error', message: error.message });
+    console.error('[MIDDLEWARE ERROR]', error.message);
+    if (!res.headersSent && !res.writableEnded) {
+      try {
+        res.status(500).json({ 
+          error: 'Internal server error', 
+          message: process.env.NODE_ENV === 'production' ? 'An error occurred' : error.message 
+        });
+      } catch (sendError) {
+        console.error('[ERROR SENDING RESPONSE]', sendError.message);
+      }
     }
   }
 });
@@ -195,11 +263,19 @@ app.use((err, req, res, next) => {
 
 // Обработка необработанных ошибок
 process.on('uncaughtException', (error) => {
-  console.error('[UNCAUGHT EXCEPTION]', error);
+  console.error('[UNCAUGHT EXCEPTION]', error.message);
+  if (error.stack) {
+    console.error('[UNCAUGHT EXCEPTION] Stack:', error.stack);
+  }
+  // Не завершаем процесс, чтобы сервер продолжал работать
+  // В production можно добавить graceful shutdown
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[UNHANDLED REJECTION]', reason);
+  if (reason instanceof Error) {
+    console.error('[UNHANDLED REJECTION] Stack:', reason.stack);
+  }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
