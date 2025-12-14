@@ -482,14 +482,50 @@ const proxyOptions = {
       }
       
       // Для всех остальных ответов отправляем оригинальный контент с модифицированными заголовками
-      if (!res.headersSent) {
-        res.writeHead(proxyRes.statusCode, modifiedHeaders);
-      }
-      // Используем bodyString если это текст, иначе Buffer
-      if (contentType.includes('text/') || contentType.includes('application/json')) {
-        res.end(bodyString);
-      } else {
-        res.end(body);
+      // КРИТИЧНО: с selfHandleResponse: true мы ОБЯЗАНЫ отправить ответ для всех запросов
+      try {
+        if (!res.headersSent) {
+          res.writeHead(proxyRes.statusCode || 200, modifiedHeaders);
+        }
+        
+        // Используем bodyString если это текст, иначе Buffer
+        if (body.length > 0) {
+          if (contentType.includes('text/') || 
+              contentType.includes('application/json') || 
+              contentType.includes('application/javascript') || 
+              contentType.includes('application/x-javascript') ||
+              contentType.includes('text/css') ||
+              contentType.includes('text/xml')) {
+            // Для текстовых ответов используем строку (если bodyString не пустой, используем его, иначе конвертируем)
+            const textContent = bodyString || body.toString('utf8');
+            res.end(textContent);
+          } else {
+            // Для бинарных данных (изображения, видео, шрифты, etc.) используем Buffer
+            res.end(body);
+          }
+        } else {
+          // Пустой ответ
+          res.end();
+        }
+      } catch (responseError) {
+        console.error('[PROXY RES] Error sending response:', responseError.message);
+        // В случае ошибки пытаемся отправить оригинальный Buffer
+        if (!res.headersSent) {
+          try {
+            res.writeHead(proxyRes.statusCode || 200);
+          } catch (e) {
+            // Игнорируем ошибку заголовков
+          }
+        }
+        if (!res.writableEnded && body.length > 0) {
+          try {
+            res.end(body);
+          } catch (e) {
+            console.error('[PROXY RES] Final error sending body:', e.message);
+          }
+        } else if (!res.writableEnded) {
+          res.end();
+        }
       }
     });
     
