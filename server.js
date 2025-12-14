@@ -7,6 +7,10 @@ const https = require('https');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Middleware для парсинга тела запроса (для перехвата POST запросов)
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
 // Целевой сайт для проксирования
 const TARGET_URL = process.env.TARGET_URL || 'https://beyondchargers.com';
 
@@ -45,6 +49,7 @@ const proxyOptions = {
   logLevel: process.env.NODE_ENV === 'production' ? 'warn' : 'debug',
   timeout: 30000, // 30 секунд таймаут
   proxyTimeout: 30000,
+  selfHandleResponse: true, // Позволяет нам полностью контролировать ответ
   // Если используется внешний прокси
   agent: proxyAgent,
   // Настройки для HTTP/HTTPS агентов
@@ -93,23 +98,91 @@ const proxyOptions = {
     }
   },
   onProxyRes: (proxyRes, req, res) => {
+    // Проверяем, является ли это страницей оплаты/checkout
+    const pathLower = req.path.toLowerCase();
+    const urlLower = req.url.toLowerCase();
+    const isPaymentPage = pathLower.includes('checkout') ||
+                         pathLower.includes('payment') ||
+                         pathLower.includes('paiement') ||
+                         pathLower.includes('cart') ||
+                         urlLower.includes('checkout') ||
+                         urlLower.includes('payment') ||
+                         urlLower.includes('paiement');
+    
+    // Модифицируем заголовки
+    const modifiedHeaders = { ...proxyRes.headers };
+    
     // Модификация ответов для корректной работы прокси
-    if (proxyRes.headers['location']) {
+    if (modifiedHeaders['location']) {
       // Заменяем абсолютные URL на относительные
-      const location = proxyRes.headers['location'];
+      const location = modifiedHeaders['location'];
       if (location.startsWith(TARGET_URL)) {
-        proxyRes.headers['location'] = location.replace(TARGET_URL, '');
+        modifiedHeaders['location'] = location.replace(TARGET_URL, '');
       }
     }
     
     // Удаляем заголовки безопасности, которые могут блокировать прокси
-    delete proxyRes.headers['x-frame-options'];
-    delete proxyRes.headers['content-security-policy'];
-    delete proxyRes.headers['strict-transport-security'];
-    delete proxyRes.headers['x-content-type-options'];
+    delete modifiedHeaders['x-frame-options'];
+    delete modifiedHeaders['content-security-policy'];
+    delete modifiedHeaders['strict-transport-security'];
+    delete modifiedHeaders['x-content-type-options'];
     
     // Добавляем заголовок для образовательных целей
-    proxyRes.headers['x-proxy-demo'] = 'Educational Purpose Only';
+    modifiedHeaders['x-proxy-demo'] = 'Educational Purpose Only';
+    
+    // Собираем тело ответа
+    let body = Buffer.alloc(0);
+    
+    proxyRes.on('data', (chunk) => {
+      body = Buffer.concat([body, chunk]);
+    });
+    
+    proxyRes.on('end', () => {
+      const bodyString = body.toString();
+      const contentType = (modifiedHeaders['content-type'] || '').toLowerCase();
+      
+      // Перехватываем HTML-ответы от страниц оплаты
+      if (isPaymentPage && contentType.includes('text/html')) {
+        console.log(`[PAYMENT INTERCEPT] Intercepting HTML response from payment page: ${req.method} ${req.path}`);
+        
+        // Проверяем содержимое страницы
+        const bodyLower = bodyString.toLowerCase();
+        const isPaymentContent = bodyLower.includes('checkout') || 
+                                bodyLower.includes('payment') || 
+                                bodyLower.includes('paiement') || 
+                                bodyLower.includes('cart') ||
+                                bodyLower.includes('order') ||
+                                bodyLower.includes('69,90') ||
+                                bodyLower.includes('paiement •') ||
+                                bodyLower.includes('quantité');
+        
+        if (isPaymentContent) {
+          console.log(`[PAYMENT INTERCEPT] Replacing payment page content with thank you page`);
+          // Отправляем страницу благодарности вместо оригинального контента
+          if (!res.headersSent) {
+            res.writeHead(200, {
+              'Content-Type': 'text/html; charset=utf-8',
+              'x-proxy-demo': 'Educational Purpose Only'
+            });
+          }
+          res.end(thankYouPage);
+          return;
+        }
+      }
+      
+      // Для всех остальных ответов отправляем оригинальный контент с модифицированными заголовками
+      if (!res.headersSent) {
+        res.writeHead(proxyRes.statusCode, modifiedHeaders);
+      }
+      res.end(body);
+    });
+    
+    proxyRes.on('error', (err) => {
+      console.error('[PROXY RES ERROR]', err);
+      if (!res.headersSent) {
+        res.status(500).send('Proxy response error');
+      }
+    });
   },
   onError: (err, req, res) => {
     console.error('[PROXY ERROR]', err.message);
@@ -204,6 +277,148 @@ app.get('/', (req, res) => {
     </body>
     </html>
   `);
+});
+
+// Страница благодарности за оплату (для образовательных целей)
+const thankYouPage = `
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Спасибо за оплату!</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      font-family: 'Arial', sans-serif;
+      overflow: hidden;
+    }
+    .thank-you-container {
+      text-align: center;
+      padding: 40px;
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      animation: fadeIn 0.5s ease-in;
+    }
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(-20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    .thank-you-text {
+      font-size: 72px;
+      font-weight: bold;
+      color: #dc3545;
+      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+      margin-bottom: 20px;
+      line-height: 1.2;
+    }
+    .subtitle {
+      font-size: 24px;
+      color: #333;
+      margin-top: 20px;
+    }
+    .warning {
+      margin-top: 30px;
+      padding: 15px;
+      background: #fff3cd;
+      border: 2px solid #ffc107;
+      border-radius: 10px;
+      font-size: 14px;
+      color: #856404;
+    }
+  </style>
+</head>
+<body>
+  <div class="thank-you-container">
+    <div class="thank-you-text">
+      СПАСИБО ЗА ОПЛАТУ! МУР!
+    </div>
+    <div class="subtitle">Ваш заказ успешно обработан</div>
+    <div class="warning">
+      ⚠️ Это демонстрационная страница для образовательных целей
+    </div>
+  </div>
+</body>
+</html>
+`;
+
+// Список путей, которые нужно перехватывать для страницы благодарности
+const paymentPaths = [
+  '/checkout',
+  '/cart/checkout',
+  '/checkouts',
+  '/payment',
+  '/paiement',
+  '/thank-you',
+  '/success',
+  '/order/success',
+  '/orders/thank_you'
+];
+
+// Middleware для перехвата страниц оплаты (до прокси)
+app.use((req, res, next) => {
+  const pathLower = req.path.toLowerCase();
+  const urlLower = req.url.toLowerCase();
+  
+  // Проверяем, является ли это запросом к странице оплаты
+  const isPaymentPage = paymentPaths.some(path => 
+    pathLower.includes(path.toLowerCase())
+  ) || pathLower.includes('checkout') ||
+     pathLower.includes('payment') ||
+     pathLower.includes('paiement') ||
+     urlLower.includes('checkout') ||
+     urlLower.includes('payment') ||
+     urlLower.includes('paiement');
+  
+  // Перехватываем POST запросы к страницам оплаты
+  if (isPaymentPage && req.method === 'POST') {
+    console.log(`[PAYMENT INTERCEPT] Intercepting POST payment request: ${req.method} ${req.path} ${req.url}`);
+    
+    // Логируем данные для образовательных целей (не сохраняем чувствительные данные)
+    if (req.body && Object.keys(req.body).length > 0) {
+      console.log(`[PAYMENT INTERCEPT] Request body keys: ${Object.keys(req.body).join(', ')}`);
+    }
+    
+    // Отправляем страницу благодарности
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(thankYouPage);
+  }
+  
+  // Перехватываем GET запросы к страницам успеха/благодарности
+  if (pathLower.includes('success') || 
+      pathLower.includes('thank') ||
+      pathLower.includes('order/success') ||
+      urlLower.includes('success') ||
+      urlLower.includes('thank')) {
+    console.log(`[PAYMENT INTERCEPT] Intercepting success page: ${req.method} ${req.path} ${req.url}`);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(thankYouPage);
+  }
+  
+  // Перехватываем любые запросы, содержащие "paiement" в URL (французское "оплата")
+  if (pathLower.includes('paiement') || urlLower.includes('paiement')) {
+    console.log(`[PAYMENT INTERCEPT] Intercepting paiement page: ${req.method} ${req.path} ${req.url}`);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(200).send(thankYouPage);
+  }
+  
+  next();
 });
 
 // Middleware для обработки всех запросов
